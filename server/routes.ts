@@ -44,12 +44,16 @@ const upload = multer({
 });
 
 async function generateVoiceover(text: string, outputPath: string) {
+  if (!process.env.ELEVENLABS_API_KEY) {
+    throw new Error('ELEVENLABS_API_KEY is not set');
+  }
+
   const response = await fetch('https://api.elevenlabs.io/v1/text-to-speech/adam/stream', {
     method: 'POST',
     headers: {
       'Accept': 'audio/mpeg',
       'Content-Type': 'application/json',
-      'xi-api-key': process.env.ELEVENLABS_API_KEY!
+      'xi-api-key': process.env.ELEVENLABS_API_KEY
     },
     body: JSON.stringify({
       text,
@@ -62,7 +66,8 @@ async function generateVoiceover(text: string, outputPath: string) {
   });
 
   if (!response.ok) {
-    throw new Error('Failed to generate voiceover');
+    const errorText = await response.text();
+    throw new Error(`Failed to generate voiceover: ${errorText}`);
   }
 
   const buffer = await response.arrayBuffer();
@@ -218,13 +223,27 @@ async function generateVideo(
       .set({ status: "processing" })
       .where(eq(generatedVideos.id, id));
 
-    // Get clips for category
-    const clips = await db.query.videoClips.findMany({
+    // Get main clips for category
+    const mainClips = await db.query.videoClips.findMany({
       where: eq(videoClips.category, category),
     });
 
-    if (clips.length === 0) {
+    if (mainClips.length === 0) {
       throw new Error("No clips available for category");
+    }
+
+    // Get hook clip if needed
+    let allClips = [...mainClips];
+    if (useHook) {
+      const hookClips = await db.query.videoClips.findMany({
+        where: eq(videoClips.category, 'hooks'),
+      });
+
+      if (hookClips.length > 0) {
+        // Add a random hook clip to the beginning
+        const randomHook = hookClips[Math.floor(Math.random() * hookClips.length)];
+        allClips = [randomHook, ...mainClips];
+      }
     }
 
     // Create temporary directory for processing
@@ -235,7 +254,7 @@ async function generateVideo(
     const concatFile = path.join(tmpDir, "concat.txt");
     await fs.writeFile(
       concatFile,
-      clips.map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`).join("\n")
+      allClips.map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`).join("\n")
     );
 
     // Concatenate videos
