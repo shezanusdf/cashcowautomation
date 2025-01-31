@@ -8,12 +8,39 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
+import express from 'express';
 
 const execAsync = promisify(exec);
-const upload = multer({ dest: "uploads/" });
+// Configure multer for video uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/");
+  },
+  filename: (req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("video/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only video files are allowed"));
+    }
+  },
+});
 
 export function registerRoutes(app: Express) {
   const httpServer = createServer(app);
+
+  // Create uploads directory if it doesn't exist
+  fs.mkdir("uploads", { recursive: true }).catch(console.error);
+  fs.mkdir("public/videos", { recursive: true }).catch(console.error);
 
   // Get all clips
   app.get("/api/clips", async (_req, res) => {
@@ -25,38 +52,54 @@ export function registerRoutes(app: Express) {
 
   // Upload a new clip
   app.post("/api/clips/upload", upload.single("file"), async (req, res) => {
-    const file = req.file;
-    const category = req.body.category;
-
-    if (!file || !category) {
-      return res.status(400).json({ message: "File and category are required" });
-    }
-
     try {
+      const file = req.file;
+      const category = req.body.category;
+
+      if (!file || !category) {
+        return res.status(400).json({
+          message: "File and category are required",
+          received: {
+            file: !!file,
+            category: !!category,
+          },
+        });
+      }
+
       // Get video duration using ffmpeg
       const { stdout } = await execAsync(
-        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 ${file.path}`
+        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${file.path}"`
       );
       const duration = parseFloat(stdout).toFixed(2);
 
       // Store clip metadata in database
-      const clip = await db.insert(videoClips).values({
-        name: file.originalname,
-        category,
-        url: file.path, // In production, this would be a cloud storage URL
-        duration: `${duration}s`,
-      }).returning();
+      const clip = await db
+        .insert(videoClips)
+        .values({
+          name: file.originalname,
+          category,
+          url: `/uploads/${path.basename(file.path)}`, // Store relative URL
+          duration: `${duration}s`,
+        })
+        .returning();
 
       res.json(clip[0]);
     } catch (error) {
-      res.status(500).json({ message: "Failed to process video" });
+      console.error("Upload error:", error);
+      res.status(500).json({
+        message: "Failed to process video",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 
-  // Delete a clip
+  // Serve uploaded files
+  app.use("/uploads", express.static("uploads"));
+
+  // Delete clip route
   app.delete("/api/clips/:id", async (req, res) => {
     const id = parseInt(req.params.id);
-    
+
     try {
       const clip = await db.query.videoClips.findFirst({
         where: eq(videoClips.id, id),
@@ -67,35 +110,41 @@ export function registerRoutes(app: Express) {
       }
 
       // Delete file
-      await fs.unlink(clip.url);
+      const filePath = path.join(process.cwd(), clip.url.replace(/^\//, ''));
+      await fs.unlink(filePath);
 
       // Delete from database
       await db.delete(videoClips).where(eq(videoClips.id, id));
-      
+
       res.json({ message: "Clip deleted successfully" });
     } catch (error) {
+      console.error("Delete error:", error);
       res.status(500).json({ message: "Failed to delete clip" });
     }
   });
 
-  // Generate video
+  // Generate video route
   app.post("/api/videos/generate", async (req, res) => {
     const { category, script, useHook } = req.body;
 
     try {
       // Create generation record
-      const video = await db.insert(generatedVideos).values({
-        category,
-        script,
-        useHook,
-        status: "pending",
-      }).returning();
+      const video = await db
+        .insert(generatedVideos)
+        .values({
+          category,
+          script,
+          useHook,
+          status: "pending",
+        })
+        .returning();
 
       // Start async video generation
       generateVideo(video[0].id, category, script, useHook).catch(console.error);
 
       res.json(video[0]);
     } catch (error) {
+      console.error("Generation error:", error);
       res.status(500).json({ message: "Failed to start video generation" });
     }
   });
@@ -111,7 +160,8 @@ async function generateVideo(
 ) {
   try {
     // Update status to processing
-    await db.update(generatedVideos)
+    await db
+      .update(generatedVideos)
       .set({ status: "processing" })
       .where(eq(generatedVideos.id, id));
 
@@ -132,12 +182,14 @@ async function generateVideo(
     const concatFile = path.join(tmpDir, "concat.txt");
     await fs.writeFile(
       concatFile,
-      clips.map(clip => `file '${path.resolve(clip.url)}'`).join("\n")
+      clips.map((clip) => `file '${path.resolve(clip.url)}'`).join("\n")
     );
 
     // Concatenate videos
     const outputVideo = path.join(tmpDir, "output.mp4");
-    await execAsync(`ffmpeg -f concat -safe 0 -i ${concatFile} -c copy ${outputVideo}`);
+    await execAsync(
+      `ffmpeg -f concat -safe 0 -i ${concatFile} -c copy ${outputVideo}`
+    );
 
     // Generate voiceover using ElevenLabs
     // This is a placeholder - implement ElevenLabs API call
@@ -151,18 +203,21 @@ async function generateVideo(
     );
 
     // Update status to completed
-    await db.update(generatedVideos)
+    await db
+      .update(generatedVideos)
       .set({ status: "completed", outputUrl: finalOutput })
       .where(eq(generatedVideos.id, id));
 
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   } catch (error) {
+    console.error("Video generation error:", error);
     // Update status to failed
-    await db.update(generatedVideos)
-      .set({ 
+    await db
+      .update(generatedVideos)
+      .set({
         status: "failed",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: error instanceof Error ? error.message : "Unknown error",
       })
       .where(eq(generatedVideos.id, id));
   }
