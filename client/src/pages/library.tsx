@@ -3,17 +3,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { VIDEO_CATEGORIES } from "@/lib/constants";
 import type { VideoClip } from "@/lib/types";
 import { Upload, Trash2 } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useState, useRef } from "react";
 
 export default function LibraryPage() {
   const { toast } = useToast();
-  
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const { data: clips, refetch } = useQuery<VideoClip[]>({
     queryKey: ["/api/clips"],
   });
@@ -31,9 +33,15 @@ export default function LibraryPage() {
     }
   });
 
-  const handleFileUpload = async (category: string, event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const handleUpload = async (category: string, file: File) => {
+    if (!file.type.startsWith('video/')) {
+      toast({
+        title: "Error",
+        description: "Please upload a video file",
+        variant: "destructive"
+      });
+      return;
+    }
 
     const formData = new FormData();
     formData.append("file", file);
@@ -52,6 +60,24 @@ export default function LibraryPage() {
         description: "Failed to upload clip",
         variant: "destructive"
       });
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (category: string, e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      await handleUpload(category, file);
     }
   };
 
@@ -75,17 +101,32 @@ export default function LibraryPage() {
                   <CardTitle>Upload New Clip</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center gap-4">
-                    <Input
+                  <div
+                    className={`border-2 border-dashed rounded-lg p-8 text-center ${
+                      isDragging ? 'border-primary bg-primary/5' : 'border-gray-300'
+                    }`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(category.id, e)}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="w-8 h-8 mx-auto mb-4 text-gray-400" />
+                    <p className="text-sm text-gray-500 mb-2">
+                      Drag and drop your video here, or click to select
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Supports: MP4, MOV, AVI (max 100MB)
+                    </p>
+                    <input
+                      ref={fileInputRef}
                       type="file"
                       accept="video/*"
-                      onChange={(e) => handleFileUpload(category.id, e)}
-                      className="flex-1"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleUpload(category.id, file);
+                      }}
+                      className="hidden"
                     />
-                    <Button>
-                      <Upload className="w-4 h-4 mr-2" />
-                      Upload
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
