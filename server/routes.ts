@@ -11,9 +11,17 @@ import path from "path";
 import express from 'express';
 
 const execAsync = promisify(exec);
+
+// Create required directories
+async function ensureDirectoriesExist() {
+  await fs.mkdir("uploads", { recursive: true });
+  await fs.mkdir("public/videos", { recursive: true });
+}
+
 // Configure multer for video uploads
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: async (req, file, cb) => {
+    await ensureDirectoriesExist().catch(console.error);
     cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
@@ -38,9 +46,8 @@ const upload = multer({
 export function registerRoutes(app: Express) {
   const httpServer = createServer(app);
 
-  // Create uploads directory if it doesn't exist
-  fs.mkdir("uploads", { recursive: true }).catch(console.error);
-  fs.mkdir("public/videos", { recursive: true }).catch(console.error);
+  // Ensure directories exist on startup
+  ensureDirectoriesExist().catch(console.error);
 
   // Get all clips
   app.get("/api/clips", async (_req, res) => {
@@ -66,10 +73,15 @@ export function registerRoutes(app: Express) {
         });
       }
 
-      // Get video duration using ffmpeg
-      const { stdout } = await execAsync(
+      // Get video duration using ffprobe
+      const { stdout, stderr } = await execAsync(
         `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${file.path}"`
       );
+
+      if (stderr) {
+        console.error("FFprobe stderr:", stderr);
+      }
+
       const duration = parseFloat(stdout).toFixed(2);
 
       // Store clip metadata in database
@@ -78,7 +90,7 @@ export function registerRoutes(app: Express) {
         .values({
           name: file.originalname,
           category,
-          url: `/uploads/${path.basename(file.path)}`, // Store relative URL
+          url: `/uploads/${path.basename(file.path)}`,
           duration: `${duration}s`,
         })
         .returning();
