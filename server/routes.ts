@@ -100,17 +100,25 @@ async function generateVideo(
       throw new Error("No clips available for category");
     }
 
-    // Get hook clip if needed
     let allClips = [...mainClips];
+    console.log(`Found ${mainClips.length} main clips for category ${category}`);
+
+    // Get hook clip if needed
     if (useHook) {
+      console.log("Looking for hook clips...");
       const hookClips = await db.query.videoClips.findMany({
         where: eq(videoClips.category, 'hooks'),
       });
+
+      console.log(`Found ${hookClips.length} hook clips`);
 
       if (hookClips.length > 0) {
         // Add a random hook clip to the beginning
         const randomHook = hookClips[Math.floor(Math.random() * hookClips.length)];
         allClips = [randomHook, ...mainClips];
+        console.log(`Added hook clip: ${randomHook.name} to the beginning`);
+      } else {
+        console.log("No hook clips found");
       }
     }
 
@@ -122,18 +130,20 @@ async function generateVideo(
 
     // Create concat file
     const concatFile = path.join(tmpDir, "concat.txt");
-    await fs.writeFile(
-      concatFile,
-      allClips.map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`).join("\n")
-    );
+    const concatContent = allClips
+      .map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`)
+      .join("\n");
+
+    await fs.writeFile(concatFile, concatContent);
+    console.log("Concat file content:", concatContent);
 
     await updateGenerationProgress(id, 40, "processing");
 
     // Concatenate videos
     const outputVideo = path.join(tmpDir, "output.mp4");
-    await execAsync(
-      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputVideo}"`
-    );
+    const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputVideo}"`;
+    console.log("Running concat command:", concatCommand);
+    await execAsync(concatCommand);
 
     await updateGenerationProgress(id, 60, "processing");
 
@@ -145,9 +155,9 @@ async function generateVideo(
 
     // Combine video and audio
     const finalOutputPath = path.join("public/videos", `${id}.mp4`);
-    await execAsync(
-      `ffmpeg -i "${outputVideo}" -i "${voiceoverPath}" -c:v copy -c:a aac "${finalOutputPath}"`
-    );
+    const finalCommand = `ffmpeg -i "${outputVideo}" -i "${voiceoverPath}" -c:v copy -c:a aac "${finalOutputPath}"`;
+    console.log("Running final command:", finalCommand);
+    await execAsync(finalCommand);
 
     // Update status to completed with 100% progress
     await db

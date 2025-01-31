@@ -34,6 +34,14 @@ export default function GeneratePage() {
   // Query to check video generation status
   const { data: generatedVideo } = useQuery<GeneratedVideo>({
     queryKey: ["/api/videos/status", generatedVideoId],
+    queryFn: async () => {
+      if (!generatedVideoId) return null;
+      const response = await fetch(`/api/videos/status/${generatedVideoId}`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch video status");
+      }
+      return response.json();
+    },
     enabled: !!generatedVideoId,
     refetchInterval: (data) => 
       data?.status === "completed" || data?.status === "failed" ? false : 2000,

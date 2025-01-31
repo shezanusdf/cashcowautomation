@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, boolean, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
 
@@ -17,6 +17,7 @@ export const generatedVideos = pgTable("generated_videos", {
   category: text("category").notNull(),
   useHook: boolean("use_hook").default(false).notNull(),
   status: text("status").notNull(), // pending, processing, completed, failed
+  progress: integer("progress").default(0).notNull(),
   outputUrl: text("output_url"),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
