@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { VideoCategory } from "@/components/video-category";
 import { VIDEO_CATEGORIES } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
-import type { VideoCategory as VideoCategoryType } from "@/lib/types";
+import { Download } from "lucide-react";
+import type { VideoCategory as VideoCategoryType, GeneratedVideo } from "@/lib/types";
 import { apiRequest } from "@/lib/queryClient";
 
 interface GenerateFormData {
@@ -19,8 +21,9 @@ interface GenerateFormData {
 
 export default function GeneratePage() {
   const [selectedCategory, setSelectedCategory] = useState<VideoCategoryType | null>(null);
+  const [generatedVideoId, setGeneratedVideoId] = useState<number | null>(null);
   const { toast } = useToast();
-  
+
   const { register, handleSubmit, formState: { errors } } = useForm<GenerateFormData>({
     defaultValues: {
       script: "",
@@ -28,12 +31,21 @@ export default function GeneratePage() {
     }
   });
 
+  // Query to check video generation status
+  const { data: generatedVideo } = useQuery<GeneratedVideo>({
+    queryKey: ["/api/videos/status", generatedVideoId],
+    enabled: !!generatedVideoId,
+    refetchInterval: (data) => 
+      data?.status === "completed" || data?.status === "failed" ? false : 2000,
+  });
+
   const generateMutation = useMutation({
     mutationFn: async (data: GenerateFormData) => {
       const response = await apiRequest("POST", "/api/videos/generate", data);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      setGeneratedVideoId(data.id);
       toast({
         title: "Video generation started",
         description: "Your video will be ready soon!"
@@ -62,6 +74,20 @@ export default function GeneratePage() {
       ...data,
       category: selectedCategory
     });
+  };
+
+  const getGenerationProgress = () => {
+    if (!generatedVideo) return 0;
+    switch (generatedVideo.status) {
+      case "pending":
+        return 25;
+      case "processing":
+        return 75;
+      case "completed":
+        return 100;
+      default:
+        return 0;
+    }
   };
 
   return (
@@ -100,9 +126,30 @@ export default function GeneratePage() {
             )}
           </div>
 
+          {generatedVideo && generatedVideo.status !== "completed" && (
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span>Generating video...</span>
+                <span>{getGenerationProgress()}%</span>
+              </div>
+              <Progress value={getGenerationProgress()} className="w-full" />
+            </div>
+          )}
+
+          {generatedVideo?.status === "completed" && generatedVideo.outputUrl && (
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => window.open(generatedVideo.outputUrl, '_blank')}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Download Generated Video
+            </Button>
+          )}
+
           <Button
             type="submit"
-            disabled={generateMutation.isPending}
+            disabled={generateMutation.isPending || generatedVideo?.status === "processing"}
             className="w-full"
           >
             {generateMutation.isPending ? "Generating..." : "Generate Video"}

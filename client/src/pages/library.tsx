@@ -10,11 +10,13 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useRef } from "react";
+import { Progress } from "@/components/ui/progress"; // Assuming Progress component is available
 
 export default function LibraryPage() {
   const { toast } = useToast();
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0); // Added upload progress state
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: clips, refetch } = useQuery<VideoClip[]>({
@@ -59,15 +61,28 @@ export default function LibraryPage() {
     formData.append("category", category);
 
     try {
-      const response = await fetch("/api/clips/upload", {
-        method: "POST",
-        body: formData,
+      const xhr = new XMLHttpRequest();
+      let progressPercent = 0;
+
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          progressPercent = Math.round((event.loaded * 100) / event.total);
+          setUploadProgress(progressPercent);
+        }
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || "Upload failed");
-      }
+      const response = await new Promise((resolve, reject) => {
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(JSON.parse(xhr.responseText));
+          } else {
+            reject(new Error(xhr.responseText));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.open('POST', '/api/clips/upload');
+        xhr.send(formData);
+      });
 
       refetch();
       toast({
@@ -83,6 +98,7 @@ export default function LibraryPage() {
       });
     } finally {
       setIsUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -130,21 +146,31 @@ export default function LibraryPage() {
                         isDragging
                           ? "border-primary bg-primary/5"
                           : "border-gray-300 hover:border-primary/50"
-                      } ${isUploading ? "opacity-50 pointer-events-none" : ""}`}
+                      } ${isUploading ? "opacity-50" : ""}`}
                       onDragOver={handleDragOver}
                       onDragLeave={handleDragLeave}
                       onDrop={(e) => handleDrop(category.id, e)}
-                      onClick={() => fileInputRef.current?.click()}
+                      onClick={() => !isUploading && fileInputRef.current?.click()}
                     >
-                      <Upload className="w-8 h-8 mx-auto mb-4 text-gray-400" />
-                      <p className="text-sm text-gray-500 mb-2">
-                        {isUploading
-                          ? "Uploading..."
-                          : "Drag and drop your video here, or click to select"}
-                      </p>
-                      <p className="text-xs text-gray-400">
-                        Supports: MP4, MOV, AVI (max 100MB)
-                      </p>
+                      {isUploading ? (
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span>Uploading...</span>
+                            <span>{uploadProgress}%</span>
+                          </div>
+                          <Progress value={uploadProgress} className="w-full" />
+                        </div>
+                      ) : (
+                        <>
+                          <Upload className="w-8 h-8 mx-auto mb-4 text-gray-400" />
+                          <p className="text-sm text-gray-500 mb-2">
+                            Drag and drop your video here, or click to select
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            Supports: MP4, MOV, AVI (max 100MB)
+                          </p>
+                        </>
+                      )}
                       <input
                         ref={fileInputRef}
                         type="file"

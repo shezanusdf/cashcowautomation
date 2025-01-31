@@ -43,6 +43,32 @@ const upload = multer({
   },
 });
 
+async function generateVoiceover(text: string, outputPath: string) {
+  const response = await fetch('https://api.elevenlabs.io/v1/text-to-speech/adam/stream', {
+    method: 'POST',
+    headers: {
+      'Accept': 'audio/mpeg',
+      'Content-Type': 'application/json',
+      'xi-api-key': process.env.ELEVENLABS_API_KEY!
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_monolingual_v1",
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.75
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to generate voiceover');
+  }
+
+  const buffer = await response.arrayBuffer();
+  await fs.writeFile(outputPath, Buffer.from(buffer));
+}
+
 export function registerRoutes(app: Express) {
   const httpServer = createServer(app);
 
@@ -55,6 +81,20 @@ export function registerRoutes(app: Express) {
       orderBy: (clips, { desc }) => [desc(clips.createdAt)],
     });
     res.json(clips);
+  });
+
+  // Get video generation status
+  app.get("/api/videos/status/:id", async (req, res) => {
+    const id = parseInt(req.params.id);
+    const video = await db.query.generatedVideos.findFirst({
+      where: eq(generatedVideos.id, id),
+    });
+
+    if (!video) {
+      return res.status(404).json({ message: "Video not found" });
+    }
+
+    res.json(video);
   });
 
   // Upload a new clip
@@ -105,8 +145,9 @@ export function registerRoutes(app: Express) {
     }
   });
 
-  // Serve uploaded files
+  // Serve uploaded files and generated videos
   app.use("/uploads", express.static("uploads"));
+  app.use("/videos", express.static("public/videos"));
 
   // Delete clip route
   app.delete("/api/clips/:id", async (req, res) => {
@@ -194,30 +235,32 @@ async function generateVideo(
     const concatFile = path.join(tmpDir, "concat.txt");
     await fs.writeFile(
       concatFile,
-      clips.map((clip) => `file '${path.resolve(clip.url)}'`).join("\n")
+      clips.map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`).join("\n")
     );
 
     // Concatenate videos
     const outputVideo = path.join(tmpDir, "output.mp4");
     await execAsync(
-      `ffmpeg -f concat -safe 0 -i ${concatFile} -c copy ${outputVideo}`
+      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputVideo}"`
     );
 
     // Generate voiceover using ElevenLabs
-    // This is a placeholder - implement ElevenLabs API call
     const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
-    // await generateVoiceover(script, voiceoverPath);
+    await generateVoiceover(script, voiceoverPath);
 
     // Combine video and audio
-    const finalOutput = path.join("public/videos", `${id}.mp4`);
+    const finalOutputPath = path.join("public/videos", `${id}.mp4`);
     await execAsync(
-      `ffmpeg -i ${outputVideo} -i ${voiceoverPath} -c:v copy -c:a aac ${finalOutput}`
+      `ffmpeg -i "${outputVideo}" -i "${voiceoverPath}" -c:v copy -c:a aac "${finalOutputPath}"`
     );
 
     // Update status to completed
     await db
       .update(generatedVideos)
-      .set({ status: "completed", outputUrl: finalOutput })
+      .set({ 
+        status: "completed", 
+        outputUrl: `/videos/${path.basename(finalOutputPath)}` 
+      })
       .where(eq(generatedVideos.id, id));
 
     // Cleanup
