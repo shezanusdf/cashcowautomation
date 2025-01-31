@@ -88,8 +88,13 @@ async function generateVideo(
   script: string,
   useHook: boolean
 ) {
+  const logAndUpdate = async (message: string, progress: number, status: string) => {
+    console.log(`[Video ${id}] ${message}`);
+    await updateGenerationProgress(id, progress, status);
+  };
+
   try {
-    await updateGenerationProgress(id, 0, "processing");
+    await logAndUpdate("Starting video generation", 0, "processing");
 
     // Get main clips for category
     const mainClips = await db.query.videoClips.findMany({
@@ -105,7 +110,7 @@ async function generateVideo(
 
     // Get hook clip if needed
     if (useHook) {
-      console.log("Looking for hook clips...");
+      await logAndUpdate("Looking for hook clips", 10, "processing");
       const hookClips = await db.query.videoClips.findMany({
         where: eq(videoClips.category, 'hooks'),
       });
@@ -122,32 +127,60 @@ async function generateVideo(
       }
     }
 
-    await updateGenerationProgress(id, 20, "processing");
+    await logAndUpdate("Creating temporary directory", 20, "processing");
 
     // Create temporary directory for processing
     const tmpDir = path.join("tmp", id.toString());
     await fs.mkdir(tmpDir, { recursive: true });
 
     // First generate voiceover
+    await logAndUpdate("Generating voiceover", 30, "processing");
     const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
-    await generateVoiceover(script, voiceoverPath);
 
-    await updateGenerationProgress(id, 40, "processing");
+    try {
+      await generateVoiceover(script, voiceoverPath);
+    } catch (error) {
+      console.error("Voiceover generation error:", error);
+      throw new Error(`Failed to generate voiceover: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // Verify voiceover file exists
+    try {
+      await fs.access(voiceoverPath);
+      console.log(`Voiceover file created at: ${voiceoverPath}`);
+    } catch (error) {
+      throw new Error(`Voiceover file not found at ${voiceoverPath}`);
+    }
+
+    await logAndUpdate("Processing clips with voiceover", 40, "processing");
 
     // Create intermediate files for each clip with voiceover
     const processedClips = await Promise.all(allClips.map(async (clip, index) => {
       const outputPath = path.join(tmpDir, `processed_${index}.mp4`);
       const inputPath = path.join(process.cwd(), clip.url.replace(/^\//, ''));
 
-      // Add voiceover to each clip
-      await execAsync(
-        `ffmpeg -i "${inputPath}" -i "${voiceoverPath}" -c:v copy -c:a aac -shortest "${outputPath}"`
-      );
+      // Verify input clip exists
+      try {
+        await fs.access(inputPath);
+        console.log(`Processing clip: ${inputPath}`);
+      } catch (error) {
+        throw new Error(`Input clip not found: ${inputPath}`);
+      }
 
-      return outputPath;
+      // Add voiceover to each clip
+      try {
+        await execAsync(
+          `ffmpeg -i "${inputPath}" -i "${voiceoverPath}" -c:v copy -c:a aac -shortest "${outputPath}"`
+        );
+        console.log(`Successfully processed clip ${index + 1}/${allClips.length}`);
+        return outputPath;
+      } catch (error) {
+        console.error(`Error processing clip ${index + 1}:`, error);
+        throw new Error(`Failed to process clip ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }));
 
-    await updateGenerationProgress(id, 60, "processing");
+    await logAndUpdate("Creating concat file", 60, "processing");
 
     // Create concat file with processed clips
     const concatFile = path.join(tmpDir, "concat.txt");
@@ -155,19 +188,48 @@ async function generateVideo(
       .map(clipPath => `file '${clipPath}'`)
       .join("\n");
 
-    await fs.writeFile(concatFile, concatContent);
-    console.log("Concat file content:", concatContent);
+    try {
+      await fs.writeFile(concatFile, concatContent);
+      console.log("Concat file content:", concatContent);
+    } catch (error) {
+      throw new Error(`Failed to create concat file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // Verify concat file exists and has content
+    try {
+      const content = await fs.readFile(concatFile, 'utf-8');
+      if (!content.trim()) {
+        throw new Error('Concat file is empty');
+      }
+      console.log('Concat file verified with content');
+    } catch (error) {
+      throw new Error(`Concat file verification failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await logAndUpdate("Concatenating clips", 80, "processing");
 
     // Concatenate all processed clips
     const finalOutputPath = path.join("public/videos", `${id}.mp4`);
     const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${finalOutputPath}"`;
     console.log("Running concat command:", concatCommand);
-    await execAsync(concatCommand);
 
-    await updateGenerationProgress(id, 80, "processing");
+    try {
+      await execAsync(concatCommand);
+      console.log("Successfully concatenated all clips");
+    } catch (error) {
+      throw new Error(`Failed to concatenate clips: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    await logAndUpdate("Cleaning up", 90, "processing");
 
     // Clean up temporary files
-    await fs.rm(tmpDir, { recursive: true });
+    try {
+      await fs.rm(tmpDir, { recursive: true });
+      console.log("Cleaned up temporary files");
+    } catch (error) {
+      console.error("Cleanup error:", error);
+      // Don't throw here as the video generation was successful
+    }
 
     // Update status to completed with 100% progress
     await db
@@ -179,6 +241,8 @@ async function generateVideo(
       })
       .where(eq(generatedVideos.id, id));
 
+    console.log("Video generation completed successfully");
+
   } catch (error) {
     console.error("Video generation error:", error);
     await db
@@ -189,6 +253,7 @@ async function generateVideo(
         error: error instanceof Error ? error.message : "Unknown error",
       })
       .where(eq(generatedVideos.id, id));
+    throw error; // Re-throw to be handled by the API route
   }
 }
 
