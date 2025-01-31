@@ -74,6 +74,107 @@ async function generateVoiceover(text: string, outputPath: string) {
   await fs.writeFile(outputPath, Buffer.from(buffer));
 }
 
+async function updateGenerationProgress(id: number, progress: number, status: string) {
+  await db
+    .update(generatedVideos)
+    .set({ status, progress })
+    .where(eq(generatedVideos.id, id));
+}
+
+async function generateVideo(
+  id: number,
+  category: string,
+  script: string,
+  useHook: boolean
+) {
+  try {
+    // Update status to processing with 0% progress
+    await updateGenerationProgress(id, 0, "processing");
+
+    // Get main clips for category
+    const mainClips = await db.query.videoClips.findMany({
+      where: eq(videoClips.category, category),
+    });
+
+    if (mainClips.length === 0) {
+      throw new Error("No clips available for category");
+    }
+
+    // Get hook clip if needed
+    let allClips = [...mainClips];
+    if (useHook) {
+      const hookClips = await db.query.videoClips.findMany({
+        where: eq(videoClips.category, 'hooks'),
+      });
+
+      if (hookClips.length > 0) {
+        // Add a random hook clip to the beginning
+        const randomHook = hookClips[Math.floor(Math.random() * hookClips.length)];
+        allClips = [randomHook, ...mainClips];
+      }
+    }
+
+    await updateGenerationProgress(id, 20, "processing");
+
+    // Create temporary directory for processing
+    const tmpDir = path.join("tmp", id.toString());
+    await fs.mkdir(tmpDir, { recursive: true });
+
+    // Create concat file
+    const concatFile = path.join(tmpDir, "concat.txt");
+    await fs.writeFile(
+      concatFile,
+      allClips.map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`).join("\n")
+    );
+
+    await updateGenerationProgress(id, 40, "processing");
+
+    // Concatenate videos
+    const outputVideo = path.join(tmpDir, "output.mp4");
+    await execAsync(
+      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputVideo}"`
+    );
+
+    await updateGenerationProgress(id, 60, "processing");
+
+    // Generate voiceover using ElevenLabs
+    const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
+    await generateVoiceover(script, voiceoverPath);
+
+    await updateGenerationProgress(id, 80, "processing");
+
+    // Combine video and audio
+    const finalOutputPath = path.join("public/videos", `${id}.mp4`);
+    await execAsync(
+      `ffmpeg -i "${outputVideo}" -i "${voiceoverPath}" -c:v copy -c:a aac "${finalOutputPath}"`
+    );
+
+    // Update status to completed with 100% progress
+    await db
+      .update(generatedVideos)
+      .set({ 
+        status: "completed", 
+        progress: 100,
+        outputUrl: `/videos/${path.basename(finalOutputPath)}` 
+      })
+      .where(eq(generatedVideos.id, id));
+
+    // Cleanup
+    await fs.rm(tmpDir, { recursive: true });
+  } catch (error) {
+    console.error("Video generation error:", error);
+    // Update status to failed
+    await db
+      .update(generatedVideos)
+      .set({
+        status: "failed",
+        progress: 0,
+        error: error instanceof Error ? error.message : "Unknown error",
+      })
+      .where(eq(generatedVideos.id, id));
+  }
+}
+
 export function registerRoutes(app: Express) {
   const httpServer = createServer(app);
 
@@ -194,6 +295,7 @@ export function registerRoutes(app: Express) {
           script,
           useHook,
           status: "pending",
+          progress: 0 // Initialize progress
         })
         .returning();
 
@@ -208,91 +310,4 @@ export function registerRoutes(app: Express) {
   });
 
   return httpServer;
-}
-
-async function generateVideo(
-  id: number,
-  category: string,
-  script: string,
-  useHook: boolean
-) {
-  try {
-    // Update status to processing
-    await db
-      .update(generatedVideos)
-      .set({ status: "processing" })
-      .where(eq(generatedVideos.id, id));
-
-    // Get main clips for category
-    const mainClips = await db.query.videoClips.findMany({
-      where: eq(videoClips.category, category),
-    });
-
-    if (mainClips.length === 0) {
-      throw new Error("No clips available for category");
-    }
-
-    // Get hook clip if needed
-    let allClips = [...mainClips];
-    if (useHook) {
-      const hookClips = await db.query.videoClips.findMany({
-        where: eq(videoClips.category, 'hooks'),
-      });
-
-      if (hookClips.length > 0) {
-        // Add a random hook clip to the beginning
-        const randomHook = hookClips[Math.floor(Math.random() * hookClips.length)];
-        allClips = [randomHook, ...mainClips];
-      }
-    }
-
-    // Create temporary directory for processing
-    const tmpDir = path.join("tmp", id.toString());
-    await fs.mkdir(tmpDir, { recursive: true });
-
-    // Create concat file
-    const concatFile = path.join(tmpDir, "concat.txt");
-    await fs.writeFile(
-      concatFile,
-      allClips.map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`).join("\n")
-    );
-
-    // Concatenate videos
-    const outputVideo = path.join(tmpDir, "output.mp4");
-    await execAsync(
-      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputVideo}"`
-    );
-
-    // Generate voiceover using ElevenLabs
-    const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
-    await generateVoiceover(script, voiceoverPath);
-
-    // Combine video and audio
-    const finalOutputPath = path.join("public/videos", `${id}.mp4`);
-    await execAsync(
-      `ffmpeg -i "${outputVideo}" -i "${voiceoverPath}" -c:v copy -c:a aac "${finalOutputPath}"`
-    );
-
-    // Update status to completed
-    await db
-      .update(generatedVideos)
-      .set({ 
-        status: "completed", 
-        outputUrl: `/videos/${path.basename(finalOutputPath)}` 
-      })
-      .where(eq(generatedVideos.id, id));
-
-    // Cleanup
-    await fs.rm(tmpDir, { recursive: true });
-  } catch (error) {
-    console.error("Video generation error:", error);
-    // Update status to failed
-    await db
-      .update(generatedVideos)
-      .set({
-        status: "failed",
-        error: error instanceof Error ? error.message : "Unknown error",
-      })
-      .where(eq(generatedVideos.id, id));
-  }
 }

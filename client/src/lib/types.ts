@@ -18,4 +18,5 @@ export interface GeneratedVideo {
   outputUrl?: string;
   error?: string;
   createdAt: string;
+  progress?: number; // Add progress field
 }

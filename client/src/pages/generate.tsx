@@ -76,17 +76,19 @@ export default function GeneratePage() {
     });
   };
 
-  const getGenerationProgress = () => {
-    if (!generatedVideo) return 0;
+  const getStatusText = () => {
+    if (!generatedVideo) return "";
     switch (generatedVideo.status) {
       case "pending":
-        return 25;
+        return "Preparing to generate...";
       case "processing":
-        return 75;
+        return "Generating video...";
       case "completed":
-        return 100;
+        return "Video ready!";
+      case "failed":
+        return "Generation failed";
       default:
-        return 0;
+        return "";
     }
   };
 
@@ -129,10 +131,10 @@ export default function GeneratePage() {
           {generatedVideo && generatedVideo.status !== "completed" && (
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span>Generating video...</span>
-                <span>{getGenerationProgress()}%</span>
+                <span>{getStatusText()}</span>
+                <span>{generatedVideo.progress || 0}%</span>
               </div>
-              <Progress value={getGenerationProgress()} className="w-full" />
+              <Progress value={generatedVideo.progress || 0} className="w-full" />
             </div>
           )}
 
@@ -149,7 +151,7 @@ export default function GeneratePage() {
 
           <Button
             type="submit"
-            disabled={generateMutation.isPending || generatedVideo?.status === "processing"}
+            disabled={generateMutation.isPending || (generatedVideo && generatedVideo.status === "processing")}
             className="w-full"
           >
             {generateMutation.isPending ? "Generating..." : "Generate Video"}
