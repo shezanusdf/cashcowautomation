@@ -16,6 +16,7 @@ const execAsync = promisify(exec);
 async function ensureDirectoriesExist() {
   await fs.mkdir("uploads", { recursive: true });
   await fs.mkdir("public/videos", { recursive: true });
+  await fs.mkdir("tmp", { recursive: true });
 }
 
 // Configure multer for video uploads
@@ -88,7 +89,6 @@ async function generateVideo(
   useHook: boolean
 ) {
   try {
-    // Update status to processing with 0% progress
     await updateGenerationProgress(id, 0, "processing");
 
     // Get main clips for category
@@ -128,36 +128,46 @@ async function generateVideo(
     const tmpDir = path.join("tmp", id.toString());
     await fs.mkdir(tmpDir, { recursive: true });
 
-    // Create concat file
+    // First generate voiceover
+    const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
+    await generateVoiceover(script, voiceoverPath);
+
+    await updateGenerationProgress(id, 40, "processing");
+
+    // Create intermediate files for each clip with voiceover
+    const processedClips = await Promise.all(allClips.map(async (clip, index) => {
+      const outputPath = path.join(tmpDir, `processed_${index}.mp4`);
+      const inputPath = path.join(process.cwd(), clip.url.replace(/^\//, ''));
+
+      // Add voiceover to each clip
+      await execAsync(
+        `ffmpeg -i "${inputPath}" -i "${voiceoverPath}" -c:v copy -c:a aac -shortest "${outputPath}"`
+      );
+
+      return outputPath;
+    }));
+
+    await updateGenerationProgress(id, 60, "processing");
+
+    // Create concat file with processed clips
     const concatFile = path.join(tmpDir, "concat.txt");
-    const concatContent = allClips
-      .map((clip) => `file '${path.join(process.cwd(), clip.url.replace(/^\//, ''))}'`)
+    const concatContent = processedClips
+      .map(clipPath => `file '${clipPath}'`)
       .join("\n");
 
     await fs.writeFile(concatFile, concatContent);
     console.log("Concat file content:", concatContent);
 
-    await updateGenerationProgress(id, 40, "processing");
-
-    // Concatenate videos
-    const outputVideo = path.join(tmpDir, "output.mp4");
-    const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputVideo}"`;
+    // Concatenate all processed clips
+    const finalOutputPath = path.join("public/videos", `${id}.mp4`);
+    const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${finalOutputPath}"`;
     console.log("Running concat command:", concatCommand);
     await execAsync(concatCommand);
 
-    await updateGenerationProgress(id, 60, "processing");
-
-    // Generate voiceover using ElevenLabs
-    const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
-    await generateVoiceover(script, voiceoverPath);
-
     await updateGenerationProgress(id, 80, "processing");
 
-    // Combine video and audio
-    const finalOutputPath = path.join("public/videos", `${id}.mp4`);
-    const finalCommand = `ffmpeg -i "${outputVideo}" -i "${voiceoverPath}" -c:v copy -c:a aac "${finalOutputPath}"`;
-    console.log("Running final command:", finalCommand);
-    await execAsync(finalCommand);
+    // Clean up temporary files
+    await fs.rm(tmpDir, { recursive: true });
 
     // Update status to completed with 100% progress
     await db
@@ -169,11 +179,8 @@ async function generateVideo(
       })
       .where(eq(generatedVideos.id, id));
 
-    // Cleanup
-    await fs.rm(tmpDir, { recursive: true });
   } catch (error) {
     console.error("Video generation error:", error);
-    // Update status to failed
     await db
       .update(generatedVideos)
       .set({
@@ -305,7 +312,7 @@ export function registerRoutes(app: Express) {
           script,
           useHook,
           status: "pending",
-          progress: 0 // Initialize progress
+          progress: 0
         })
         .returning();
 
