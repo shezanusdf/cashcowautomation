@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 export function NavigationBar() {
   const [location] = useLocation();
@@ -16,28 +17,18 @@ export function NavigationBar() {
             </div>
             <div className="ml-6 flex space-x-8">
               <Link href="/">
-                <a
-                  className={cn(
-                    "inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium",
-                    location === "/"
-                      ? "border-blue-500 text-gray-900"
-                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                  )}
-                >
-                  Generate
-                </a>
+                <Button variant="ghost" className="w-full justify-start">
+                  <span className="flex items-center">
+                    Generate
+                  </span>
+                </Button>
               </Link>
               <Link href="/library">
-                <a
-                  className={cn(
-                    "inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium",
-                    location === "/library"
-                      ? "border-blue-500 text-gray-900"
-                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                  )}
-                >
-                  Library
-                </a>
+                <Button variant="ghost" className="w-full justify-start">
+                  <span className="flex items-center">
+                    Library
+                  </span>
+                </Button>
               </Link>
             </div>
           </div>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Video Generated</title>
+</head>
+<body>
+    <h1>Your video has been generated!</h1>
+    <!-- Updated video preview to reference the proper video location with cache busting -->
+    <video id="videoPreview" width="640" height="480" controls>
+        <source src="/videos/generated_video.mp4?t=0" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <br>
+    <!-- Updated download link to reference the proper video location, using target="_blank" to avoid reloading the page -->
+    <a id="downloadLink" href="/videos/generated_video.mp4?t=0" target="_blank" download>Download Video</a>
+    
+    <!-- Inline script updates the video source and download link with a cache buster so the latest file is loaded -->
+    <script>
+      document.addEventListener("DOMContentLoaded", function() {
+          const timestamp = new Date().getTime();
+          // update video source with cache buster
+          const videoSource = document.querySelector("video source");
+          videoSource.src = "/videos/generated_video.mp4?t=" + timestamp;
+          // force the video element to reload the source
+          const video = document.getElementById("videoPreview");
+          video.load();
+
+          // update download link with cache buster
+          const downloadLink = document.getElementById("downloadLink");
+          downloadLink.href = "/videos/generated_video.mp4?t=" + timestamp;
+      });
+    </script>
+</body>
+</html> 

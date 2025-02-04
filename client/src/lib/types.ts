@@ -3,7 +3,7 @@ export type VideoCategory = 'motivation' | 'gym' | 'money' | 'houses' | 'women' 
 export interface VideoClip {
   id: number;
   name: string;
-  category: VideoCategory;
+  category: string;
   url: string;
   duration: string;
   createdAt: string;

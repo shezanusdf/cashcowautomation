@@ -2,14 +2,12 @@ import express, { type Express } from "express";
 import fs from "fs";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer, createLogger } from "vite";
+import { createServer as createViteServer } from "vite";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
-
-const viteLogger = createLogger();
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -23,45 +21,65 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
-  const vite = await createViteServer({
-    ...viteConfig,
-    configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
+  console.log('Setting up Vite...');
+  try {
+    const vite = await createViteServer({
+      ...viteConfig,
+      configFile: false,
+      customLogger: {
+        info: (msg: string) => {
+          console.log('[Vite Info]', msg);
+        },
+        warn: (msg: string) => {
+          console.warn('[Vite Warning]', msg);
+        },
+        error: (msg: string, options?: any) => {
+          console.error('[Vite Error]', msg);
+          process.exit(1);
+        },
+        warnOnce: (msg: string) => {
+          console.warn('[Vite Warn Once]', msg);
+        },
+        clearScreen: () => {},
+        hasErrorLogged:() => false,
+        hasWarned: false,
       },
-    },
-    server: {
-      middlewareMode: true,
-      hmr: { server },
-    },
-    appType: "custom",
-  });
+      server: {
+        middlewareMode: true,
+        hmr: { server },
+      },
+      appType: "custom",
+    });
+    console.log('Vite server created successfully');
+    app.use(vite.middlewares);
+    console.log('Vite middleware applied');
+    app.use("*", async (req, res, next) => {
+      const url = req.originalUrl;
 
-  app.use(vite.middlewares);
-  app.use("*", async (req, res, next) => {
-    const url = req.originalUrl;
-
-    try {
-      const clientTemplate = path.resolve(
-        __dirname,
-        "..",
-        "client",
-        "index.html",
-      );
-
-      // always reload the index.html file from disk incase it changes
-      let template = await fs.promises.readFile(clientTemplate, "utf-8");
-      template = template.replace(`src="/src/main.tsx"`, `src="/src/main.tsx?v=${nanoid()}"`)
-      const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
-    } catch (e) {
-      vite.ssrFixStacktrace(e as Error);
-      next(e);
-    }
-  });
+      try {
+        const clientTemplate = path.resolve(
+          __dirname,
+          "..",
+          "client",
+          "index.html",
+        );
+        console.log(`Processing request for URL: ${url}`);
+        // always reload the index.html file from disk incase it changes
+        let template = await fs.promises.readFile(clientTemplate, "utf-8");
+        template = template.replace(`src="/src/main.tsx"`, `src="/src/main.tsx?v=${nanoid()}"`)
+        const page = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(page);
+        console.log(`Successfully served page for URL: ${url}`);
+      } catch (e) {
+        console.error(`Error processing request for URL ${url}:`, e);
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
+  } catch (error) {
+    console.error('Error setting up Vite:', error);
+    throw error;
+  }
 }
 
 export function serveStatic(app: Express) {

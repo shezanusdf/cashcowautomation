@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import type { VideoCategory } from "@/lib/types";
 
 interface VideoCategoryProps {
-  id: VideoCategory;
+  id: { id: string; title: string };
   label: string;
   description: string;
   selected?: boolean;
